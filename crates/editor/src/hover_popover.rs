@@ -249,8 +249,8 @@ pub fn hover_at_inlay(
 /// selections changed.
 pub fn hide_hover(editor: &mut Editor, cx: &mut Context<Editor>) -> bool {
     let info_popovers = editor.hover_state.info_popovers.drain(..);
-    let diagnostics_popover = editor.hover_state.diagnostic_popover.take();
-    let did_hide = info_popovers.count() > 0 || diagnostics_popover.is_some();
+    let diagnostic_popover = editor.hover_state.diagnostic_popover.take();
+    let did_hide = info_popovers.count() > 0 || diagnostic_popover.is_some();
 
     editor.hover_state.info_task = None;
     editor.hover_state.triggered_from = None;
@@ -510,6 +510,31 @@ fn show_hover(
                 })
             }
 
+            // Stack an LSP document-link tooltip onto the hover (matches
+            // VSCode). Resolution is deduplicated through `LspStore`'s
+            // per-link `Shared` task so concurrent hovers across editors
+            // share the same in-flight `documentLink/resolve` request.
+            let doc_link_task = this
+                .update(cx, |editor, cx| {
+                    editor.document_links_at(buffer.clone(), buffer_position, cx)
+                })
+                .ok()
+                .flatten();
+            let doc_link_tooltips = match doc_link_task {
+                Some(task) => task
+                    .await
+                    .into_iter()
+                    .filter_map(|link| {
+                        let multi_buffer_range = snapshot
+                            .buffer_snapshot()
+                            .buffer_anchor_range_to_anchor_range(link.range.clone())?;
+                        let tooltip = link.tooltip?;
+                        Some((multi_buffer_range, tooltip))
+                    })
+                    .collect::<Vec<_>>(),
+                None => Vec::new(),
+            };
+
             for hover_result in hovers_response {
                 // Create symbol range of anchors for highlighting and filtering of future requests.
                 let range = hover_result
@@ -543,6 +568,32 @@ fn show_hover(
                     .flatten();
                 info_popovers.push(InfoPopover {
                     symbol_range: RangeInEditor::Text(range),
+                    parsed_content,
+                    scroll_handle,
+                    keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
+                    anchor: Some(anchor),
+                    last_bounds: Rc::new(Cell::new(None)),
+                    _subscription: subscription,
+                });
+            }
+
+            for (multi_buffer_range, tooltip) in doc_link_tooltips {
+                let blocks = vec![HoverBlock {
+                    text: tooltip.to_string(),
+                    kind: HoverBlockKind::Markdown,
+                }];
+                let parsed_content = parse_blocks(&blocks, language_registry.as_ref(), None, cx);
+                let scroll_handle = ScrollHandle::new();
+                let subscription = this
+                    .update(cx, |_, cx| {
+                        parsed_content.as_ref().map(|parsed_content| {
+                            cx.observe(parsed_content, |_, _, cx| cx.notify())
+                        })
+                    })
+                    .ok()
+                    .flatten();
+                info_popovers.push(InfoPopover {
+                    symbol_range: RangeInEditor::Text(multi_buffer_range),
                     parsed_content,
                     scroll_handle,
                     keyboard_grace: Rc::new(RefCell::new(ignore_timeout)),
