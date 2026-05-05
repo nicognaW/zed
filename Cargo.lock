@@ -7347,6 +7347,7 @@ dependencies = [
  "serde_json",
  "settings",
  "smallvec",
+ "task",
  "theme",
  "theme_settings",
  "time",
