@@ -7,12 +7,17 @@ use crate::{
     scroll::{ScrollOffset, SharedScrollAnchor},
 };
 use gpui::{Pixels, WindowTextSystem};
+use icu_segmenter::{WordSegmenter, WordSegmenterBorrowed, options::WordBreakInvariantOptions};
 use language::{CharClassifier, Point};
 use multi_buffer::{MultiBufferOffset, MultiBufferRow, MultiBufferSnapshot};
 use serde::Deserialize;
+use unicode_script::{Script, UnicodeScript};
 use workspace::searchable::Direction;
 
-use std::{ops::Range, sync::Arc};
+use std::{
+    ops::Range,
+    sync::{Arc, OnceLock},
+};
 
 /// Defines search strategy for items in `movement` module.
 /// `FindRange::SingeLine` only looks for a match on a single line at a time, whereas
@@ -264,6 +269,10 @@ pub fn line_end(
 /// Returns a position of the previous word boundary, where a word character is defined as either
 /// uppercase letter, lowercase letter, '_' character or language-specific word character (like '-' in CSS).
 pub fn previous_word_start(map: &DisplaySnapshot, point: DisplayPoint) -> DisplayPoint {
+    if let Some(point) = previous_segmented_word_start(map, point) {
+        return point;
+    }
+
     let raw_point = point.to_point(map);
     let classifier = map.buffer_snapshot().char_classifier_at(raw_point);
 
@@ -439,6 +448,10 @@ pub fn is_subword_start(left: char, right: char, classifier: &CharClassifier) ->
 /// Returns a position of the next word boundary, where a word character is defined as either
 /// uppercase letter, lowercase letter, '_' character or language-specific word character (like '-' in CSS).
 pub fn next_word_end(map: &DisplaySnapshot, point: DisplayPoint) -> DisplayPoint {
+    if let Some(point) = next_segmented_word_end(map, point) {
+        return point;
+    }
+
     let raw_point = point.to_point(map);
     let classifier = map.buffer_snapshot().char_classifier_at(raw_point);
     let mut is_first_iteration = true;
@@ -513,6 +526,64 @@ pub fn is_subword_end(left: char, right: char, classifier: &CharClassifier) -> b
     let is_word_end =
         (classifier.kind(left) != classifier.kind(right)) && !classifier.is_whitespace(left);
     is_word_end || is_subword_boundary_end(left, right, classifier)
+}
+
+fn previous_segmented_word_start(
+    map: &DisplaySnapshot,
+    point: DisplayPoint,
+) -> Option<DisplayPoint> {
+    let point = point.to_point(map);
+    let ranges = segmented_word_ranges_for_line(map, point.row)?;
+    let range = ranges
+        .into_iter()
+        .rev()
+        .find(|range| range.start < point.column)?;
+    Some(Point::new(point.row, range.start).to_display_point(map))
+}
+
+fn next_segmented_word_end(map: &DisplaySnapshot, point: DisplayPoint) -> Option<DisplayPoint> {
+    let point = point.to_point(map);
+    let ranges = segmented_word_ranges_for_line(map, point.row)?;
+    let range = ranges.into_iter().find(|range| range.end > point.column)?;
+    Some(Point::new(point.row, range.end).to_display_point(map))
+}
+
+fn segmented_word_ranges_for_line(map: &DisplaySnapshot, row: u32) -> Option<Vec<Range<u32>>> {
+    let line_end = Point::new(row, map.buffer_snapshot().line_len(MultiBufferRow(row)));
+    let line = map
+        .buffer_snapshot()
+        .text_for_range(Point::new(row, 0)..line_end)
+        .collect::<String>();
+
+    if !line.chars().any(is_dictionary_segmented_script) {
+        return None;
+    }
+
+    let mut ranges = Vec::new();
+    let mut previous_boundary = None;
+    for (boundary, word_type) in word_segmenter().segment_str(&line).iter_with_word_type() {
+        if let Some(start) = previous_boundary
+            && word_type.is_word_like()
+            && start < boundary
+        {
+            ranges.push(start as u32..boundary as u32);
+        }
+        previous_boundary = Some(boundary);
+    }
+
+    (!ranges.is_empty()).then_some(ranges)
+}
+
+fn is_dictionary_segmented_script(ch: char) -> bool {
+    matches!(
+        ch.script(),
+        Script::Han | Script::Hiragana | Script::Katakana | Script::Hangul
+    )
+}
+
+fn word_segmenter() -> &'static WordSegmenterBorrowed<'static> {
+    static WORD_SEGMENTER: OnceLock<WordSegmenterBorrowed<'static>> = OnceLock::new();
+    WORD_SEGMENTER.get_or_init(|| WordSegmenter::new_auto(WordBreakInvariantOptions::default()))
 }
 
 /// Returns true if the transition from `left` to `right` is a subword boundary,
@@ -980,6 +1051,11 @@ mod tests {
         assert("helloˇ.---..ˇtest", cx);
         assert("test  ˇ.--ˇtest", cx);
         assert("oneˇ,;:!?ˇtwo", cx);
+
+        assert("Token的本质简单说就是ˇ词组ˇ", cx);
+        assert("Token的本质简单说ˇ就是ˇ词组", cx);
+        assert("Token的本质ˇ简单ˇ说就是词组", cx);
+        assert("ˇTokenˇ的本质简单说就是词组", cx);
     }
 
     #[gpui::test]
@@ -1163,6 +1239,11 @@ mod tests {
         assert("helloˇ.---..ˇtest", cx);
         assert("testˇ.--ˇ test", cx);
         assert("oneˇ,;:!?ˇtwo", cx);
+
+        assert("ˇTokenˇ的本质简单说就是词组", cx);
+        assert("Tokenˇ的ˇ本质简单说就是词组", cx);
+        assert("Token的ˇ本质ˇ简单说就是词组", cx);
+        assert("Token的本质ˇ简单ˇ说就是词组", cx);
     }
 
     #[gpui::test]
