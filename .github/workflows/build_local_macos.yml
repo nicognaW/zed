@@ -33,6 +33,8 @@ jobs:
 
       - name: Build Zed binaries
         run: cargo build --package zed --package cli --target aarch64-apple-darwin
+        env:
+          ZED_BUNDLE: true
 
       - name: Create app bundle
         run: |
