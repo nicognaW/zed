@@ -528,7 +528,7 @@ pub fn is_subword_end(left: char, right: char, classifier: &CharClassifier) -> b
     is_word_end || is_subword_boundary_end(left, right, classifier)
 }
 
-fn previous_segmented_word_start(
+pub fn previous_segmented_word_start(
     map: &DisplaySnapshot,
     point: DisplayPoint,
 ) -> Option<DisplayPoint> {
@@ -541,11 +541,36 @@ fn previous_segmented_word_start(
     Some(Point::new(point.row, range.start).to_display_point(map))
 }
 
-fn next_segmented_word_end(map: &DisplaySnapshot, point: DisplayPoint) -> Option<DisplayPoint> {
+pub fn next_segmented_word_end(map: &DisplaySnapshot, point: DisplayPoint) -> Option<DisplayPoint> {
     let point = point.to_point(map);
     let ranges = segmented_word_ranges_for_line(map, point.row)?;
     let range = ranges.into_iter().find(|range| range.end > point.column)?;
     Some(Point::new(point.row, range.end).to_display_point(map))
+}
+
+pub fn previous_segmented_word_end(
+    map: &DisplaySnapshot,
+    point: DisplayPoint,
+) -> Option<DisplayPoint> {
+    let point = point.to_point(map);
+    let ranges = segmented_word_ranges_for_line(map, point.row)?;
+    let range = ranges
+        .into_iter()
+        .rev()
+        .find(|range| range.end <= point.column)?;
+    Some(Point::new(point.row, range.end).to_display_point(map))
+}
+
+pub fn next_segmented_word_start(
+    map: &DisplaySnapshot,
+    point: DisplayPoint,
+) -> Option<DisplayPoint> {
+    let point = point.to_point(map);
+    let ranges = segmented_word_ranges_for_line(map, point.row)?;
+    let range = ranges
+        .into_iter()
+        .find(|range| range.start > point.column)?;
+    Some(Point::new(point.row, range.start).to_display_point(map))
 }
 
 fn segmented_word_ranges_for_line(map: &DisplaySnapshot, row: u32) -> Option<Vec<Range<u32>>> {

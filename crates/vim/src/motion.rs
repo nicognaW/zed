@@ -1692,6 +1692,11 @@ pub(crate) fn next_word_start(
         .char_classifier_at(point.to_point(map))
         .ignore_punctuation(ignore_punctuation);
     for _ in 0..times {
+        if let Some(new_point) = movement::next_segmented_word_start(map, point) {
+            point = new_point;
+            continue;
+        }
+
         let mut crossed_newline = false;
         let new_point =
             movement::find_boundary(map, point, FindRange::MultiLine, &mut |left, right| {
@@ -1766,6 +1771,24 @@ pub(crate) fn next_word_end(
     allow_cross_newline: bool,
     always_advance: bool,
 ) -> DisplayPoint {
+    let mut search_point = point;
+    let mut point = point;
+    let mut moved_by_segmenter = false;
+    for _ in 0..times {
+        if let Some(new_point) = movement::next_segmented_word_end(map, search_point) {
+            search_point = new_point;
+            point = movement::saturating_left(map, search_point);
+            moved_by_segmenter = true;
+            continue;
+        }
+
+        break;
+    }
+
+    if moved_by_segmenter {
+        return point;
+    }
+
     let classifier = map
         .buffer_snapshot()
         .char_classifier_at(point.to_point(map))
@@ -1822,6 +1845,21 @@ fn previous_word_start(
     ignore_punctuation: bool,
     times: usize,
 ) -> DisplayPoint {
+    let mut moved_by_segmenter = false;
+    for _ in 0..times {
+        if let Some(new_point) = movement::previous_segmented_word_start(map, point) {
+            point = new_point;
+            moved_by_segmenter = true;
+            continue;
+        }
+
+        break;
+    }
+
+    if moved_by_segmenter {
+        return point;
+    }
+
     let classifier = map
         .buffer_snapshot()
         .char_classifier_at(point.to_point(map))
@@ -1854,6 +1892,22 @@ fn previous_word_end(
     ignore_punctuation: bool,
     times: usize,
 ) -> DisplayPoint {
+    let mut point = point;
+    let mut moved_by_segmenter = false;
+    for _ in 0..times {
+        if let Some(new_point) = movement::previous_segmented_word_end(map, point) {
+            point = movement::saturating_left(map, new_point);
+            moved_by_segmenter = true;
+            continue;
+        }
+
+        break;
+    }
+
+    if moved_by_segmenter {
+        return point;
+    }
+
     let classifier = map
         .buffer_snapshot()
         .char_classifier_at(point.to_point(map))
@@ -4160,6 +4214,27 @@ mod test {
         cx.set_shared_state(initial_state).await;
         cx.simulate_shared_keystrokes("}").await;
         cx.shared_state().await.assert_eq("something(fooˇ)");
+    }
+
+    #[gpui::test]
+    async fn test_cjk_word_motions(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        cx.set_state("Token的本质ˇ简单说就是词组", Mode::Normal);
+        cx.simulate_keystrokes("w");
+        cx.assert_editor_state("Token的本质简单ˇ说就是词组");
+
+        cx.set_state("Token的本质ˇ简单说就是词组", Mode::Normal);
+        cx.simulate_keystrokes("e");
+        cx.assert_editor_state("Token的本质简ˇ单说就是词组");
+
+        cx.set_state("Token的本质简单ˇ说就是词组", Mode::Normal);
+        cx.simulate_keystrokes("b");
+        cx.assert_editor_state("Token的本质ˇ简单说就是词组");
+
+        cx.set_state("Token的本质ˇ简单说就是词组", Mode::Normal);
+        cx.simulate_keystrokes("g e");
+        cx.assert_editor_state("Token的本ˇ质简单说就是词组");
     }
 
     #[gpui::test]
