@@ -1,0 +1,78 @@
+name: build_local_macos
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  build_macos_aarch64:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Add Rust target
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --git https://github.com/zed-industries/cargo-bundle.git --branch zed-deploy
+
+      - name: Generate licenses
+        run: script/generate-licenses
+
+      - name: Build Zed binaries
+        run: cargo build --package zed --package cli --target aarch64-apple-darwin
+
+      - name: Create app bundle
+        run: |
+          set -euo pipefail
+          channel=$(<crates/zed/RELEASE_CHANNEL)
+          export ZED_RELEASE_CHANNEL="$channel"
+          export ZED_BUNDLE=true
+          export CARGO_BUNDLE_SKIP_BUILD=true
+          export CXXFLAGS="-stdlib=libc++"
+
+          pushd crates/zed
+          cp Cargo.toml Cargo.toml.backup
+          sed -i.backup "s/package.metadata.bundle-${channel}/package.metadata.bundle/" Cargo.toml
+          app_path=$(cargo bundle --target aarch64-apple-darwin --select-workspace-root | xargs)
+          mv Cargo.toml.backup Cargo.toml
+          rm -f Cargo.toml.backup
+          popd
+
+          cp target/aarch64-apple-darwin/debug/zed "$app_path/Contents/MacOS/zed"
+          cp target/aarch64-apple-darwin/debug/cli "$app_path/Contents/MacOS/cli"
+
+          if [[ -f crates/zed/resources/Document.icns ]]; then
+            mkdir -p "$app_path/Contents/Resources"
+            cp crates/zed/resources/Document.icns "$app_path/Contents/Resources/Document.icns"
+          fi
+
+          cat crates/zed/resources/zed.entitlements \
+            | sed '/com.apple.developer.associated-domains/,+1d' \
+            > "$app_path/Contents/Resources/zed.entitlements"
+
+          codesign --force --deep \
+            --entitlements "$app_path/Contents/Resources/zed.entitlements" \
+            --sign - \
+            "$app_path" \
+            -v
+
+          ditto -c -k --keepParent "$app_path" target/Zed-cjk-aarch64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zed-cjk-aarch64.zip
+          path: target/Zed-cjk-aarch64.zip
+          if-no-files-found: error
