@@ -32,7 +32,7 @@ jobs:
         run: script/generate-licenses
 
       - name: Build Zed binaries
-        run: cargo build --package zed --package cli --target aarch64-apple-darwin
+        run: cargo build --release --package zed --package cli --target aarch64-apple-darwin
         env:
           ZED_BUNDLE: true
 
@@ -48,13 +48,13 @@ jobs:
           pushd crates/zed
           cp Cargo.toml Cargo.toml.backup
           sed -i.backup "s/package.metadata.bundle-${channel}/package.metadata.bundle/" Cargo.toml
-          app_path=$(cargo bundle --target aarch64-apple-darwin --select-workspace-root | xargs)
+          app_path=$(cargo bundle --release --target aarch64-apple-darwin --select-workspace-root | xargs)
           mv Cargo.toml.backup Cargo.toml
           rm -f Cargo.toml.backup
           popd
 
-          cp target/aarch64-apple-darwin/debug/zed "$app_path/Contents/MacOS/zed"
-          cp target/aarch64-apple-darwin/debug/cli "$app_path/Contents/MacOS/cli"
+          cp target/aarch64-apple-darwin/release/zed "$app_path/Contents/MacOS/zed"
+          cp target/aarch64-apple-darwin/release/cli "$app_path/Contents/MacOS/cli"
 
           if [[ -f crates/zed/resources/Document.icns ]]; then
             mkdir -p "$app_path/Contents/Resources"
